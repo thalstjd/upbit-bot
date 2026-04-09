@@ -6,92 +6,82 @@ import pyupbit
 import json
 from datetime import datetime
 
-# 1. 페이지 설정 및 다크 테마 가독성 개선
 st.set_page_config(page_title="Minchacco Trading Bot", layout="wide")
 
-# CSS: 가독성을 위해 배경을 살짝 밝히고 텍스트 대비를 높임
+# 가시성 개선 CSS
 st.markdown("""
     <style>
     .main { background-color: #0d1117; color: #adbac7; }
     .stMetric { 
-        background-color: #1c2128; /* 박스 색상을 조금 더 밝게 변경 */
-        border: 2px solid #FFD700; /* 테두리를 황금색으로 강조 */
-        border-radius: 12px; 
-        padding: 20px;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+        background-color: #1c2128; border: 2px solid #FFD700; 
+        border-radius: 12px; padding: 20px;
     }
-    [data-testid="stMetricLabel"] { color: #8b949e !important; font-size: 16px !important; }
-    [data-testid="stMetricValue"] { color: #FFD700 !important; font-size: 28px !important; font-weight: bold !important; }
-    h1, h2, h3 { color: #FFD700; border-bottom: 1px solid #30363d; padding-bottom: 10px; }
+    [data-testid="stMetricValue"] { color: #FFD700 !important; font-size: 28px !important; }
     </style>
     """, unsafe_allow_html=True)
 
 st.title("🏆 Minchacco Bitcoin Intelligence")
 
-# 2. 업비트 계정 연결 (Secrets 우선 순위)
+# 🔐 키 연결 상태 확인 (디버깅)
 def get_upbit():
-    try:
-        # 웹 환경 (Streamlit Cloud Secrets)
-        return pyupbit.Upbit(st.secrets["upbit_access_key"], st.secrets["upbit_secret_key"])
-    except:
-        try:
-            # 로컬 환경 (config.json)
-            with open("config.json", "r", encoding="utf-8") as f:
-                cfg = json.load(f)
-            return pyupbit.Upbit(cfg['upbit_access_key'], cfg['upbit_secret_key'])
-        except:
-            return None
+    access, secret = None, None
+    
+    # 1. 웹 환경(Secrets) 확인
+    if "upbit_access_key" in st.secrets:
+        access = st.secrets["upbit_access_key"]
+        secret = st.secrets["upbit_secret_key"]
+        # st.sidebar.success("✅ 웹 서버에서 키 인식 성공")
+    
+    # 2. 로컬 환경 확인
+    elif os.path.exists("config.json"):
+        with open("config.json", "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+        access = cfg['upbit_access_key']
+        secret = cfg['upbit_secret_key']
+        # st.sidebar.info("🏠 로컬 컴퓨터 키 사용 중")
+
+    if access and secret:
+        return pyupbit.Upbit(access, secret)
+    return None
 
 upbit = get_upbit()
 
-# 3. 실시간 자산 현황 (API 호출)
+# 💰 실시간 자산 섹션
 st.subheader("💰 실시간 자산 현황 (LIVE)")
 c1, c2, c3, c4 = st.columns(4)
 
 if upbit:
     try:
-        krw = upbit.get_balance("KRW") or 0
-        btc = upbit.get_balance("KRW-BTC") or 0
-        price = pyupbit.get_current_price("KRW-BTC") or 0
-        avg = upbit.get_avg_buy_price("KRW-BTC") or 0
+        krw = upbit.get_balance("KRW")
+        btc = upbit.get_balance("KRW-BTC")
+        price = pyupbit.get_current_price("KRW-BTC")
+        avg = upbit.get_avg_buy_price("KRW-BTC")
+        
+        # 키가 맞는데 0원인 경우 방지 (API 호출 결과 확인)
+        if krw is None:
+            st.error("🚨 업비트 서버에서 데이터를 가져올 수 없습니다. 키 권한(자산조회)을 확인하세요.")
+            krw, btc, price, avg = 0, 0, 0, 0
         
         total = krw + (btc * price)
-        
         c1.metric("총 자산", f"{total:,.0f} KRW")
         c2.metric("현금 잔고", f"{krw:,.0f} KRW")
         c3.metric("BTC 평가금", f"{(btc * price):,.0f} KRW")
         
         if btc > 0:
             yield_p = ((price - avg) / avg) * 100
-            c4.metric("포지션 수익률", f"{yield_p:+.2f}%")
+            c4.metric("수익률", f"{yield_p:+.2f}%")
         else:
-            c4.metric("포지션", "매수 대기 중")
-    except:
-        st.error("API 키가 올바르지 않거나 Secrets 설정이 필요합니다.")
+            c4.metric("포지션", "관망 중")
+    except Exception as e:
+        st.error(f"⚠️ 연결 오류 발생: {e}")
 else:
-    st.info("⚠️ 상단 자산을 보려면 Streamlit Cloud 'Secrets'에 키를 입력하세요.")
+    st.error("🚨 웹사이트가 API 키를 찾지 못했습니다. Secrets 설정을 다시 확인해주세요.")
 
-st.markdown("<br>", unsafe_allow_html=True)
+st.markdown("---")
 
-# 4. 로봇 모니터링 및 매매 기록 (파일 기반)
-# ※ 주의: 이 섹션은 깃허브에 Push된 시점의 데이터만 보여줍니다.
-st.subheader("🤖 로봇 상태 및 매매 로그")
-
-col_left, col_right = st.columns([1, 1])
-
-with col_left:
-    if os.path.exists("status.json"):
-        with open("status.json", "r") as f:
-            status = json.load(f)
-        st.write(f"✅ **마지막 동기화 시점**: {status.get('update_time', 'N/A')}")
-        st.info(f"지표: {status['indicator']} | 목표: {status['target']} | 현재가: {status['price']:,.0f}")
-    else:
-        st.write("로봇 상태 파일이 없습니다.")
-
-with col_right:
-    if os.path.exists("trade_history.csv"):
-        df = pd.read_csv("trade_history.csv")
-        st.write("✅ **최근 매매 기록**")
-        st.dataframe(df.sort_values(by='date', ascending=False).head(5), use_container_width=True)
-    else:
-        st.write("매매 기록이 없습니다.")
+# 🤖 상태창 (GitHub에 Push된 최신 상태)
+st.subheader("🤖 로봇 상태 (최근 업로드 시점)")
+if os.path.exists("status.json"):
+    with open("status.json", "r") as f:
+        status = json.load(f)
+    st.info(f"마지막 업데이트: {status.get('update_time')} | 지표: {status['indicator']} | 목표: {status['target']}")
